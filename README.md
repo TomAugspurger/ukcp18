@@ -1,18 +1,39 @@
-# stactools-template
+# stactools.ukcp18
 
-This is a template repo used for creating new packages for `stactools`.
+stactools package for UKCP18
 
-## How to use
+## Usage
 
-1. Clone this template repository as your package name, e.g. `landsat`.
-   This name should be short, memorable, and a valid Python package name (i.e. it shouldn't start with a number, etc).
-   It can, however, include a hyphen, in which case the name for Python imports will be the underscored version, e.g. `landsat-8` goes to `stactools.landsat_8`.
-   Your name will be used on PyPI to publish the package in the stactools namespace, e.g. `stactools-landsat`.
-2. Change into the top-level directory of your package and run `scripts/rename`.
-   This will update _most_ of the files in the repository with your new package name.
-3. Update `setup.cfg` with your package description and such.
-4. Update the LICENSE with your company's information (or whomever holds the copyright).
-5. Run `sphinx-quickstart` in the `docs` directory to create the documentation template.
-6. Update `docs/installation_and_basic_usage.ipynb` to provide an interactive notebook to help users get started. Include the following badge at the top of the README to launch the notebook: [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/stactools-packages/template/main?filepath=docs/installation_and_basic_usage.ipynb). Be sure to modify the badge href to match your package repo.
-7. Add example Items (and Collections and Catalogs, if included) to a `examples/` directory.
-8. Delete this file, and rename `README-template.md` to `README.md`. Update your new README to provide information about how to use your package.
+Load the metadata
+
+```python
+>>> import planetary_computer
+>>> import adlfs
+>>> import xarray as xr
+
+>>> account_name = "ukmeteuwest"
+>>> container_name = "ukcp18"
+>>> credential = planetary_computer.sas.get_token(account_name, container_name).token
+
+>>> fs = adlfs.AzureBlobFileSystem("ukmeteuwest", credential=credential)
+>>> paths = fs.glob(
+...     "ukcp18/badc/ukcp18/data/land-gcm/global/60km/rcp26/01/*/day/*/*18991201-19091130.nc"
+... )
+>>> paths = [x for x in paths if x.split("/")[9] not in {"sfcWind", "uas", "vas"}]
+>>> datasets = [xr.open_dataset(fs.open(path), chunks={}) for path in paths]
+>>> ds = xr.merge(datasets, join="exact")
+```
+
+Create the Collection
+
+```python
+>>> import stactools.ukcp18.stac
+>>> collection = stactools.ukcp18.stac.create_collection(ds)
+```
+
+Create an Item
+
+```python
+>>> import stactools.ukcp18.stac
+>>> collection = stactools.ukcp18.stac.create_collection(ds)
+```

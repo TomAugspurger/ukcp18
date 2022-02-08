@@ -18,14 +18,6 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
         usage
     else
         ./scripts/lint
-
-        codespell -I .codespellignore -f \
-            scripts/* \
-            *.py ./**/*.py \
-            *.md \
-            docs/*.rst docs/**/*.rst \
-            docs/*.ipynb docs/**/*.ipynb
-
         pytest --cov=stactools ${COVERAGE_DIRS}
         coverage xml
     fi

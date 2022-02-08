@@ -1,20 +1,15 @@
 from __future__ import annotations
 
-import json
-from multiprocessing.sharedctypes import Value
-import re
+import dataclasses
+import datetime
 import logging
 import pathlib
-import dataclasses
-import collections
-import datetime
-from typing import Any
-import urllib.parse
+import re
 
-import pystac
-import xstac
 import fsspec
+import pystac
 import xarray as xr
+import xstac
 
 logger = logging.getLogger(__name__)
 
@@ -220,7 +215,10 @@ def create_collection(ds: xr.DataArray) -> pystac.Collection:
         pystac.Link(
             rel="documentation",
             title="UKCP18 Science Reports",
-            target="https://www.metoffice.gov.uk/research/approach/collaboration/ukcp/guidance-science-reports",
+            target=(
+                "https://www.metoffice.gov.uk/research/approach/collaboration/ukcp/"
+                "guidance-science-reports"
+            ),
             media_type="text/html",
         )
     )
@@ -289,9 +287,7 @@ def create_collection(ds: xr.DataArray) -> pystac.Collection:
     return r
 
 
-def create_item(
-    urls, asset_href_transform=None, storage_options=None, asset_extra_fields=None
-) -> pystac.Item:
+def create_item(urls, storage_options=None, asset_extra_fields=None) -> pystac.Item:
     """
     Create items for a set of related assets.
     """
@@ -338,13 +334,10 @@ def create_item(
     item = xstac.xarray_to_stac(ds, template, reference_system=4326)
     item.id = parts.item_id
 
-    if asset_href_transform is None:
-        asset_href_transform = lambda x: x
-
     for path in urls:
         parts = Parts.from_filename(path)
         asset = pystac.Asset(
-            asset_href_transform(path),
+            path,
             media_type="application/netcdf",
             roles=["data"],
             extra_fields=asset_extra_fields,

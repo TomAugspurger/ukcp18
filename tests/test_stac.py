@@ -2,18 +2,21 @@ import datetime
 import pathlib
 
 import pytest
-import stactools.ukcp18.stac
 import xarray as xr
 
+import stactools.ukcp18.stac
 
 HERE = pathlib.Path(__file__).parent
 DATA = HERE / "data"
 
 
-@pytest.mark.parametrize("filename", [
-    "tasmax_rcp26_land-gcm_global_60km_01_day_18991201-19091130.nc",
-    "directory/tasmax_rcp26_land-gcm_global_60km_01_day_18991201-19091130.nc",
-])
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "tasmax_rcp26_land-gcm_global_60km_01_day_18991201-19091130.nc",
+        "directory/tasmax_rcp26_land-gcm_global_60km_01_day_18991201-19091130.nc",
+    ],
+)
 def test_parts(filename):
     result = stactools.ukcp18.stac.Parts.from_filename(filename)
     assert result.scenario == "rcp26"
@@ -33,8 +36,6 @@ def test_create_collection():
 
 
 def test_create_item():
-    urls = [
-        f"file://{p}" for p in DATA.glob("*.nc")
-    ]
+    urls = [f"file://{p}" for p in DATA.glob("*.nc")]
     item = stactools.ukcp18.stac.create_item(urls)
     assert item.assets

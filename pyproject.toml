@@ -1,3 +1,10 @@
 [build-system]
 requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
+
+
+[tool.black]
+include = "(src|tests)/.*.py"
+
+[tool.mypy-fsspec]
+ignore_missing_imports = true

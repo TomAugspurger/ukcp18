@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+from multiprocessing.sharedctypes import Value
+import re
 import logging
+import pathlib
+import dataclasses
 import collections
 import datetime
 from typing import Any
@@ -11,6 +15,7 @@ import pystac
 import xstac
 import fsspec
 import xarray as xr
+
 logger = logging.getLogger(__name__)
 
 
@@ -32,33 +37,84 @@ VARIABLES = [
 TEMPORAL_RESOLUTIONS = ["day", "mon"]
 
 
-Parts = collections.namedtuple(
-    "Parts", "member_id variable time_resolution filename start_datetime end_datetime"
+_xpr = re.compile(
+    r"(?P<variable>\w+)_"
+    r"(?P<scenario>\w+)_land-gcm_global_60km_"
+    r"(?P<member_id>\d+)_"
+    r"(?P<temporal_resolution>[^_]+)_"
+    r"(?P<start_datetime>\d{8})-"
+    r"(?P<end_datetime>\d{8}).nc"
 )
 
 
-def parts_of(x):
-    _, _, _, _, _, _, _, _, member_id, variable, time_resolution, _, filename = x.split(
-        "/"
-    )
-    date_range = filename.split("_")[-1].rstrip(".nc").split("-")
+@dataclasses.dataclass()
+class Parts:
+    scenario: str
+    member_id: int
+    variable: str
+    temporal_resolution: str
+    start_datetime: datetime.datetime
+    end_datetime: datetime.datetime
+    filename: str
 
-    return Parts(
-        member_id, variable, time_resolution, filename, date_range[0], date_range[1]
-    )
+    @classmethod
+    def from_filename(cls, filename: str) -> "Parts":
+        filename = pathlib.Path(filename).name
+        m = _xpr.match(filename)
+        if not m:
+            raise ValueError(filename)
+        d = m.groupdict()
+        d["member_id"] = int(d["member_id"])
+        fmt = "%Y%m%d"
+        d["start_datetime"] = datetime.datetime.strptime(d["start_datetime"], fmt)
+        d["end_datetime"] = datetime.datetime.strptime(d["end_datetime"], fmt)
+        d["filename"] = filename
+
+        return cls(**d)
+
+    @property
+    def item_id(self):
+        return "-".join(
+            [
+                "ukcp18",
+                self.temporal_resolution,
+                self.scenario,
+                str(self.member_id),
+                self.start_datetime.isoformat() + "Z",
+                self.end_datetime.isoformat() + "Z",
+            ]
+        )
 
 
-def path_to_item_id(x):
-    parts = parts_of(x)
-    return "-".join(
-        [
-            "ukcp18",
-            parts.member_id,
-            parts.time_resolution,
-            parts.start_datetime,
-            parts.end_datetime,
-        ]
-    )
+def align(datasets, base):
+    datasets = [x.copy().drop_vars("height", errors="ignore") for x in datasets]
+    to_merge = []
+    for x in datasets:
+        if set(x.data_vars) & {"sfcWind", "uas", "vas"}:
+            x = x.isel(latitude=slice(1, None))
+            x["latitude"] = base["latitude"]
+            x["longitude"] = base["longitude"]
+            x["latitude_bnds"] = base["latitude_bnds"]
+            x["longitude_bnds"] = base["longitude_bnds"]
+            to_merge.append(x)
+        else:
+            to_merge.append(x)
+    return to_merge
+
+
+def merge(datasets, base):
+    """
+    Merge multiple datasets, accounting for differences in
+
+    - latitude
+    - longitude
+    - height
+
+    It's not clear whether the datacube extension will / should be OK with
+    this. We're lying about the extents of the latitude and longitude.
+    """
+    to_merge = align(datasets, base)
+    return xr.merge(to_merge, join="exact")
 
 
 def get_assets_for_collection(protocol, storage_options):
@@ -233,11 +289,21 @@ def create_collection(ds: xr.DataArray) -> pystac.Collection:
     return r
 
 
-def create_item(files, protocol, asset_href_transform=None, **storage_options: dict[str, Any]) -> pystac.Item:
-    fs = fsspec.filesystem(protocol, **storage_options)
-    ds = xr.open_mfdataset([fs.open(f) for f in files], join="exact", engine="h5netcdf")
-
-    path = files[0]
+def create_item(
+    urls, asset_href_transform=None, storage_options=None, asset_extra_fields=None
+) -> pystac.Item:
+    """
+    Create items for a set of related assets.
+    """
+    storage_options = storage_options or {}
+    datasets = [
+        xr.open_dataset(
+            fsspec.open(f, **storage_options).open(), engine="h5netcdf", chunks={}
+        )
+        for f in urls
+    ]
+    ds = merge(datasets, base=datasets[0])
+    path = urls[0]
 
     for k, v in ds.variables.items():
         attrs = {
@@ -246,13 +312,7 @@ def create_item(files, protocol, asset_href_transform=None, **storage_options: d
         }
         ds[k].attrs = attrs
 
-    parts = parts_of(path)
-    fmt = "%Y%m%d"
-    start_datetime = (
-        datetime.datetime.strptime(parts.start_datetime, fmt).isoformat() + "Z"
-    )
-    end_datetime = datetime.datetime.strptime(parts.end_datetime, fmt).isoformat() + "Z"
-
+    parts = Parts.from_filename(path)
     template = pystac.Item(
         "item",
         geometry={
@@ -269,25 +329,30 @@ def create_item(files, protocol, asset_href_transform=None, **storage_options: d
         },
         bbox=[-180, -90, 180, 90],
         datetime=None,
-        properties={"start_datetime": start_datetime, "end_datetime": end_datetime},
+        properties={
+            "start_datetime": parts.start_datetime.isoformat() + "Z",
+            "end_datetime": parts.end_datetime.isoformat() + "Z",
+        },
     )
 
     item = xstac.xarray_to_stac(ds, template, reference_system=4326)
-    item.id = path_to_item_id(path)
+    item.id = parts.item_id
 
     if asset_href_transform is None:
         asset_href_transform = lambda x: x
 
-    for path in files:
+    for path in urls:
+        parts = Parts.from_filename(path)
         asset = pystac.Asset(
             asset_href_transform(path),
             media_type="application/netcdf",
             roles=["data"],
+            extra_fields=asset_extra_fields,
         )
-        item.add_asset("data", asset)
+        item.add_asset(parts.variable, asset)
 
-    item.properties["ukcp18:member_id"] = int(parts.member_id)
-    item.properties["ukcp18:time_resolution"] = parts.time_resolution
+    item.properties["ukcp18:member_id"] = parts.member_id
+    item.properties["ukcp18:temporal_resolution"] = parts.temporal_resolution
 
     item.validate()
     return item
